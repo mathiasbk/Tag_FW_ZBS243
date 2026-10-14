@@ -20,6 +20,7 @@
 
 #include <stdlib.h>
 #include "tagtype.h"
+#include "powermgt.h"
 
 #include <stdarg.h>
 
@@ -176,12 +177,6 @@ void epdConfigGPIO(bool setup) {
         P2DIR &= ~((1 << 2) | (1 << 0));  // D/C and Reset as output
         P1DIR &= ~(1 << 7);               // EPD Select as output
         P1_7 = 1;                         // deselect EPD
-#ifdef BOARD_P03_HIGH
-        P0FUNC &= ~(1 << 3);
-        P0DIR &= ~(1 << 3);
-        P0_3 = 1;
-        timerDelay(TIMER_TICKS_PER_MS * 10);
-#endif
 
 #ifdef EPD_VAR_FREEZER
         P1DIR &= ~(1 << 5);  // BS1 as output
@@ -526,7 +521,7 @@ void clearScreen() {
 
 void drawNoWait() {
 #ifdef VAR_BW16_HINK
-    epdWrite(0x1A, 2, 0x19, 0x00);  // stock fw writes the temperature itself (25C here)
+    epdWrite(0x1A, 2, (uint8_t)temperature, 0x00);  // the controller doesn't measure it; stock fw writes it too
     epdWrite(0x22, 1, 0xD7);
 #elif defined(VAR_BW16)
     epdWrite(0x22, 1, 0xF7);

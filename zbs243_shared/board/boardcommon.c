@@ -59,12 +59,6 @@ void boardInit(void) {
     // BS1 = low
     P1_2 = 0;
 #endif
-#ifdef BOARD_P03_HIGH
-    // newer M2 boards (ST-GM16XX2): stock fw drives P0.3 high before talking to the EPD
-    P0FUNC &= ~(1 << 3);
-    P0DIR &= ~(1 << 3);
-    P0_3 = 1;
-#endif
 
     spiInit();
 }
