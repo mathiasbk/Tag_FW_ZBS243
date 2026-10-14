@@ -6,7 +6,14 @@
 
 #define EPD_SSD1619
 
+#ifdef M2_ZBS_16_SSDVAR_200_BW_HINK
+// this panel has inverted B/W polarity and no working invert option in 0x21,
+// so RAM data is inverted in software
+void epdTxInv(uint8_t b);
+#define epdSend epdTxInv
+#else
 #define epdSend spiTXByte
+#endif
 #define EPD_DIRECTION_X false
 #define EPD_DIRECTION_Y true
 #define EPD_SIZE_SINGLE false

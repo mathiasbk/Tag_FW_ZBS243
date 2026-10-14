@@ -23,6 +23,21 @@
 
 #include <stdarg.h>
 
+#ifdef VAR_BW16_HINK
+static uint8_t __xdata epdInvMask = 0x00;  // emulates the 0x21 B/W invert option, which this controller ignores
+static uint8_t __xdata epdDataXor = 0;
+static bool __xdata epdDcIsData = false;  // reading back P2_2 doesn't give the output level
+void epdTxInv(uint8_t b) {
+    if (!epdDcIsData) {  // command byte
+        epdDataXor = (b == 0x24 || b == 0x26) ? epdInvMask : 0;
+        spiTXByte(b);
+    } else {
+        spiTXByte(b ^ epdDataXor);
+    }
+}
+#define spiTXByte(x) epdTxInv(x)
+#endif
+
 #define CMD_DRV_OUTPUT_CTRL 0x01
 #define CMD_SOFT_START_CTRL 0x0C
 #define CMD_ENTER_SLEEP 0x10
@@ -68,6 +83,19 @@
         P1_7 = 1;    \
     } while (0)
 
+#ifdef VAR_BW16_HINK
+#define markCommand() \
+    do {              \
+        P2_2 = 0;     \
+        epdDcIsData = false; \
+    } while (0)
+
+#define markData() \
+    do {           \
+        P2_2 = 1;  \
+        epdDcIsData = true; \
+    } while (0)
+#else
 #define markCommand() \
     do {              \
         P2_2 = 0;     \
@@ -77,6 +105,7 @@
     do {           \
         P2_2 = 1;  \
     } while (0)
+#endif
 
 #define EPD_RESET_MAX 220
 #define EPD_BUSY P2_1
@@ -147,6 +176,12 @@ void epdConfigGPIO(bool setup) {
         P2DIR &= ~((1 << 2) | (1 << 0));  // D/C and Reset as output
         P1DIR &= ~(1 << 7);               // EPD Select as output
         P1_7 = 1;                         // deselect EPD
+#ifdef BOARD_P03_HIGH
+        P0FUNC &= ~(1 << 3);
+        P0DIR &= ~(1 << 3);
+        P0_3 = 1;
+        timerDelay(TIMER_TICKS_PER_MS * 10);
+#endif
 
 #ifdef EPD_VAR_FREEZER
         P1DIR &= ~(1 << 5);  // BS1 as output
@@ -185,7 +220,19 @@ void epdEnterSleep() {
 }
 void epdSetup() {
     bool res = epdReset();
-#ifdef VAR_BW16
+#ifdef VAR_BW16_HINK
+    // init sequence from stock SoluM fw (ST-GM16XX2, SSD path)
+    epdWrite(CMD_DRV_OUTPUT_CTRL, 3, (SCREEN_HEIGHT - 1) & 0xff, (SCREEN_HEIGHT - 1) >> 8, 0x00);
+    epdWrite(CMD_DUMMY_PERIOD, 1, 0x1B);
+    epdWrite(CMD_GATE_LINE_WIDTH, 1, 0x0B);
+    epdWrite(CMD_DATA_ENTRY_MODE, 1, 0x01);
+    epdWrite(CMD_WINDOW_X_SIZE, 2, 0x00, (SCREEN_WIDTH / 8) - 1);
+    epdWrite(CMD_WINDOW_Y_SIZE, 4, (SCREEN_HEIGHT - 1) & 0xff, (SCREEN_HEIGHT - 1) >> 8, 0x00, 0x00);
+    epdWrite(CMD_BORDER_WAVEFORM_CTRL, 1, 0x33);
+    epdWrite(CMD_SOFT_START_CTRL, 3, 0xC7, 0x8F, 0x8F);
+    epdWrite(CMD_DISP_UPDATE_CTRL, 1, 0x83);
+    epdInvMask = 0x00;
+#elif defined(VAR_BW16)
     epdWrite(CMD_DRV_OUTPUT_CTRL, 3, (SCREEN_HEIGHT - 1) & 0xff, (SCREEN_HEIGHT - 1) >> 8, 0x00);
     epdWrite(CMD_BORDER_WAVEFORM_CTRL, 1, 0x0B);  // stock says 0x33
     epdWrite(CMD_DUMMY_PERIOD, 1, 0x1B);
@@ -207,6 +254,9 @@ void epdSetup() {
 #endif
     isInited = true;
     currentLut = EPD_LUT_DEFAULT;
+#ifdef DEBUGEPD
+    pr("EPD: setup done, reset=%d BUSY=%d\n", (uint8_t)res, (uint8_t)P2_1);
+#endif
 }
 static uint8_t epdGetStatus() {
     uint8_t sta;
@@ -417,6 +467,12 @@ void setPosXY(uint16_t x, uint16_t y) {
     epdWrite(CMD_YSTART_POS, 2, (y) & 0xff, (y) >> 8);
 }
 void setColorMode(uint8_t red, uint8_t bw) {
+#ifdef VAR_BW16_HINK
+    // 0x21 invert bits are ignored by this controller, emulate them by inverting RAM data
+    epdInvMask = (bw & EPD_MODE_INVERT) ? 0xFF : 0x00;
+    red = 0;
+    return;
+#endif
     epdWrite(CMD_DISP_UPDATE_CTRL, 1, (red << 4) | bw);
 }
 void fillWindowWithPattern(bool color) {
@@ -433,11 +489,35 @@ void clearWindow(bool color) {
         epdWrite(CMD_WRITE_PATTERN_BW, 1, 0x66);
     }
 }
+#ifdef VAR_BW16_HINK
+// this controller has no auto-pattern fill (0x46/0x47), so fill the RAM by hand
+static void fillRam(uint8_t cmd, uint8_t val) {
+    markCommand();
+    epdSelect();
+    epdSend(cmd);
+    markData();
+    for (uint16_t c = 0; c < ((1UL * SCREEN_HEIGHT * SCREEN_WIDTH) / 8); c++) {
+        epdSend(val);
+    }
+    epdDeselect();
+}
+#endif
 void clearScreen() {
     setWindowX(0, SCREEN_WIDTH);
     setWindowY(0, SCREEN_HEIGHT);
     setPosXY(0, 0);
     epdWrite(CMD_DATA_ENTRY_MODE, 1, 0x03);  // was 3
+#ifdef VAR_BW16_HINK
+    {
+        uint8_t m = epdInvMask;
+        epdInvMask = 0x00;  // write white raw
+        fillRam(CMD_WRITE_FB_BW, 0xFF);
+        setPosXY(0, 0);
+        fillRam(CMD_WRITE_FB_RED, 0xFF);
+        epdInvMask = m;
+    }
+    return;
+#endif
     epdWrite(CMD_WRITE_PATTERN_BW, 1, 0x66);
     epdBusyWait(TIMER_TICKS_PER_MS * 100);
     epdWrite(CMD_WRITE_PATTERN_RED, 1, 0x66);
@@ -445,7 +525,10 @@ void clearScreen() {
 }
 
 void drawNoWait() {
-#ifdef VAR_BW16
+#ifdef VAR_BW16_HINK
+    epdWrite(0x1A, 2, 0x19, 0x00);  // stock fw writes the temperature itself (25C here)
+    epdWrite(0x22, 1, 0xD7);
+#elif defined(VAR_BW16)
     epdWrite(0x22, 1, 0xF7);
 #else
     #ifdef ALT_DRAW_COMMAND
@@ -711,6 +794,9 @@ void epdPrintBegin(uint16_t x, uint16_t y, bool direction, bool fontsize, bool c
         memset(rbuffer, 0, 32);
     }
 
+#ifdef VAR_BW16_HINK
+    color = false;  // BW-only panel: draw 'red' text in black
+#endif
     if (color) {
         epdWrite(CMD_WRITE_FB_RED, 0);
     } else {

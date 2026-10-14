@@ -57,6 +57,13 @@
 	#define UI_152x152
 #endif
 
+#ifdef M2_ZBS_16_SSDVAR_200_BW_HINK
+	// 1.54/1.6" BW M2 tag ST-GM16XX2 with HINK-E0154A16 panel (200x200).
+	// Uses the stock-fw init/refresh; the controller lacks 0x46/0x47 auto-fill and the 0x21 invert option.
+	#define M2_ZBS_16_SSDVAR_200_BW
+	#define BOARD_P03_HIGH
+	#define VAR_BW16_HINK
+#endif
 #ifdef M2_ZBS_16_SSDVAR_200_BW
 	// This is the 200px version of the 1.54/1.6" BW M2 tag
 	#define EPD_SSDVAR
